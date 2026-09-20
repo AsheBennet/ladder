@@ -1,0 +1,132 @@
+openapi: 3.0.3
+info:
+  title: Ladder
+  version: 0.1.0
+  description: Ranked ladder / matchmaking for Project+ online (MVP).
+servers:
+  - url: http://localhost:8080
+paths:
+  /auth/session:
+    post:
+      summary: Create an anonymous session
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionToken, playerId]
+                properties:
+                  sessionToken: { type: string }
+                  playerId: { type: string }
+  /queue:
+    post:
+      summary: Enqueue for 1v1 matchmaking
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { enum: [queued] }
+        "409":
+          description: Already queued or in a match
+    delete:
+      summary: Leave the queue
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Left
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { enum: [left] }
+  /queue/status:
+    get:
+      summary: Poll queue / match-found
+      security: [{ session: [] }]
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status]
+                    properties:
+                      status: { enum: [queued, idle] }
+                  - type: object
+                    required: [status, match]
+                    properties:
+                      status: { enum: [matched] }
+                      match:
+                        $ref: "#/components/schemas/MatchPayload"
+  /match/{matchId}/result:
+    post:
+      summary: Report match result (idempotent on reportId)
+      security: [{ session: [] }]
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [winnerId, reportId]
+              properties:
+                winnerId: { type: string }
+                reportId: { type: string }
+      responses:
+        "200":
+          description: Accepted (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, applied]
+                properties:
+                  ok: { type: boolean }
+                  applied: { type: boolean }
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+  schemas:
+    MatchPayload:
+      type: object
+      required: [matchId, seed, localPlayerIndex, players, endpoints]
+      properties:
+        matchId: { type: string }
+        seed: { type: integer, format: int64 }
+        localPlayerIndex: { type: integer }
+        players:
+          type: array
+          items:
+            type: object
+            required: [playerId, rating]
+            properties:
+              playerId: { type: string }
+              rating: { type: number }
+        endpoints:
+          type: array
+          items:
+            type: object
+            required: [playerId, host, port]
+            properties:
+              playerId: { type: string }
+              host: { type: string }
+              port: { type: integer }

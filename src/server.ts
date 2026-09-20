@@ -1,62 +1,26 @@
 import Fastify from "fastify";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
+import { migrate } from "./db/migrate.js";
 import { createSession, playerIdFromToken } from "./auth/session.js";
 import {
   enqueue,
   leaveQueue,
   getStatus,
+  type Advertise,
 } from "./queue/matchmaking.js";
 import { reportResult } from "./match/result.js";
-
-async function migrate(db: ReturnType<typeof createPool>) {
-  await db.query(`
-CREATE TABLE IF NOT EXISTS players (
-  id TEXT PRIMARY KEY,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  player_id TEXT NOT NULL REFERENCES players(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS ratings (
-  player_id TEXT NOT NULL REFERENCES players(id),
-  season_id TEXT NOT NULL,
-  mu DOUBLE PRECISION NOT NULL,
-  phi DOUBLE PRECISION NOT NULL,
-  sigma DOUBLE PRECISION NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (player_id, season_id)
-);
-CREATE TABLE IF NOT EXISTS queue (
-  player_id TEXT PRIMARY KEY REFERENCES players(id),
-  enqueued_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS matches (
-  id TEXT PRIMARY KEY,
-  seed BIGINT NOT NULL,
-  season_id TEXT NOT NULL,
-  player0_id TEXT NOT NULL REFERENCES players(id),
-  player1_id TEXT NOT NULL REFERENCES players(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  winner_id TEXT REFERENCES players(id),
-  rated_at TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS match_reports (
-  report_id TEXT PRIMARY KEY,
-  match_id TEXT NOT NULL REFERENCES matches(id),
-  reporter_id TEXT NOT NULL REFERENCES players(id),
-  winner_id TEXT NOT NULL REFERENCES players(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-`);
-}
 
 export async function buildApp(env: NodeJS.ProcessEnv = process.env) {
   const cfg = loadConfig(env);
   const db = createPool(cfg.databaseUrl);
   await migrate(db);
+
+  // Seed port allocator from config if still at default insert
+  await db.query(
+    `UPDATE port_alloc SET next_port = GREATEST(next_port, $1) WHERE id = 1`,
+    [cfg.placeholderPortBase],
+  );
 
   const app = Fastify({ logger: true });
 
@@ -79,9 +43,13 @@ export async function buildApp(env: NodeJS.ProcessEnv = process.env) {
     return playerId;
   }
 
+  app.get("/health", async () => ({ ok: true }));
+
   app.post("/auth/session", async () => createSession(db, cfg.seasonId));
 
-  app.post("/queue", async (req, reply) => {
+  app.post<{
+    Body: { advertise?: Advertise };
+  }>("/queue", async (req, reply) => {
     try {
       const playerId = await requirePlayer(req.headers.authorization);
       const existing = await db.query(
@@ -91,12 +59,22 @@ export async function buildApp(env: NodeJS.ProcessEnv = process.env) {
       if (existing.rowCount) {
         return reply.code(409).send({ error: "already_queued" });
       }
-      const status = await enqueue(db, playerId, cfg.seasonId);
+      const advertise = req.body?.advertise;
+      const status = await enqueue(
+        db,
+        playerId,
+        cfg.seasonId,
+        cfg,
+        advertise,
+      );
       return { status };
     } catch (e) {
       const err = e as Error & { code?: string; statusCode?: number };
       if (err.code === "already_in_match") {
         return reply.code(409).send({ error: "already_in_match" });
+      }
+      if (err.code === "bad_advertise") {
+        return reply.code(400).send({ error: "bad_advertise" });
       }
       if (err.statusCode === 401) return reply.code(401).send({ error: "unauthorized" });
       throw e;

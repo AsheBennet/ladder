@@ -5,8 +5,7 @@ services:
       POSTGRES_USER: ladder
       POSTGRES_PASSWORD: ladder
       POSTGRES_DB: ladder
-    ports:
-      - "5432:5432"
+    # no host port publish — avoids clash with local Postgres; api reaches db on the compose network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ladder -d ladder"]
       interval: 2s

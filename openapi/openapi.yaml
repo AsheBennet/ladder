@@ -24,6 +24,20 @@ paths:
     post:
       summary: Enqueue for 1v1 matchmaking
       security: [{ session: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                advertise:
+                  type: object
+                  required: [host, port]
+                  description: Optional listen endpoint Dock/Bridge will use; if omitted Ladder allocates host/port from PLACEHOLDER_* pool.
+                  properties:
+                    host: { type: string }
+                    port: { type: integer, minimum: 1, maximum: 65535 }
       responses:
         "200":
           description: Queued

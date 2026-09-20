@@ -17,11 +17,16 @@ describe("matchmaking happy path", () => {
       PORT: "0",
       SEASON_ID: "test",
       PLACEHOLDER_HOST: "127.0.0.1",
-      PLACEHOLDER_PORT_BASE: "40000",
+      PLACEHOLDER_PORT_BASE: "41000",
     });
     app = built.app;
     db = built.db;
     await app.ready();
+    // isolate allocator for this suite
+    await db.query("UPDATE port_alloc SET next_port = 41000 WHERE id = 1");
+    await db.query("DELETE FROM match_reports");
+    await db.query("DELETE FROM matches");
+    await db.query("DELETE FROM queue");
   });
 
   after(async () => {
@@ -40,6 +45,7 @@ describe("matchmaking happy path", () => {
       method: "POST",
       url: "/queue",
       headers: { authorization: `Bearer ${a.sessionToken}` },
+      payload: { advertise: { host: "10.0.0.1", port: 7777 } },
     });
     assert.equal(q1.statusCode, 200);
     assert.equal(q1.json().status, "queued");
@@ -48,6 +54,7 @@ describe("matchmaking happy path", () => {
       method: "POST",
       url: "/queue",
       headers: { authorization: `Bearer ${b.sessionToken}` },
+      // no advertise → server allocates
     });
     assert.equal(q2.statusCode, 200);
 
@@ -80,6 +87,15 @@ describe("matchmaking happy path", () => {
     assert.equal(m1.match.seed, m2.match.seed);
     assert.notEqual(m1.match.localPlayerIndex, m2.match.localPlayerIndex);
     assert.equal(m1.match.endpoints.length, 2);
+
+    const epA = m1.match.endpoints.find((e) => e.playerId === a.playerId);
+    const epB = m1.match.endpoints.find((e) => e.playerId === b.playerId);
+    assert.ok(epA && epB);
+    assert.equal(epA.host, "10.0.0.1");
+    assert.equal(epA.port, 7777);
+    assert.equal(epB.host, "127.0.0.1");
+    assert.equal(epB.port, 41000);
+    assert.notEqual(epA.port, epB.port);
 
     const winnerId = a.playerId;
     const r1 = await app.inject({
